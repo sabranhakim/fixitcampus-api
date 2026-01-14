@@ -69,8 +69,15 @@ switch ($uri_parts[0]) {
             $name = $data['name'];
             $email = $data['email'];
             $password_hash = password_hash($data['password'], PASSWORD_BCRYPT);
-            $stmt = $mysqli->prepare("INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, 'user')");
-            $stmt->bind_param("sss", $name, $email, $password_hash);
+            
+            // Ambil role dari data, default 'user'. Validasi untuk memastikan hanya 'user' atau 'admin'.
+            $role = $data['role'] ?? 'user';
+            if (!in_array($role, ['user', 'admin'])) {
+                $role = 'user';
+            }
+
+            $stmt = $mysqli->prepare("INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)");
+            $stmt->bind_param("ssss", $name, $email, $password_hash, $role);
             if ($stmt->execute()) {
                 http_response_code(201);
                 echo json_encode(["message" => "User registered successfully"]);
