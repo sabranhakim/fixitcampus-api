@@ -24,6 +24,7 @@ type Ticket struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	Status      string `json:"status"`
+	CreatedAt   string `json:"created_at"`
 }
 
 type Claims struct {
@@ -83,6 +84,7 @@ func main() {
 	createTable()
 
 	http.HandleFunc("/tickets", handleTickets)
+	http.HandleFunc("/tickets/", handleTickets)
 
 	log.Println("Ticket service running on 0.0.0.0:8082")
 	log.Fatal(http.ListenAndServe("0.0.0.0:8082", nil))
@@ -90,17 +92,26 @@ func main() {
 
 //// ================= HANDLER =================
 func handleTickets(w http.ResponseWriter, r *http.Request) {
+	log.Printf("DEBUG: Incoming request path: %s", r.URL.Path) // Added debug log
 	authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		path := strings.TrimPrefix(r.URL.Path, "/tickets")
+		log.Printf("DEBUG: Trimmed path: %s", path) // Added debug log
 		userRole := r.Header.Get("X-User-Role")
+		log.Printf("DEBUG: User Role from Token: %s", userRole) // Added debug log
 
 		switch r.Method {
 
 		case http.MethodGet:
 			if path != "" && path != "/" {
-				id, _ := strconv.Atoi(strings.Trim(path, "/"))
+				id, err := strconv.Atoi(strings.Trim(path, "/"))
+				if err != nil {
+					log.Printf("ERROR: Invalid ticket ID in path: %v", err)
+					http.Error(w, `{"error":"Invalid ticket ID"}`, http.StatusBadRequest)
+					return
+				}
+				log.Printf("DEBUG: Extracted ID for GET: %d", id) // Added debug log
 				getTicket(w, r, id)
 			} else {
 				if userRole == "admin" {
@@ -118,7 +129,12 @@ func handleTickets(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, `{"error":"Admin access required"}`, http.StatusForbidden)
 				return
 			}
-			id, _ := strconv.Atoi(strings.Trim(path, "/"))
+			id, err := strconv.Atoi(strings.Trim(path, "/"))
+			if err != nil {
+				log.Printf("ERROR: Invalid ticket ID in path for PUT: %v", err)
+				http.Error(w, `{"error":"Invalid ticket ID"}`, http.StatusBadRequest)
+				return
+			}
 			updateTicketStatus(w, r, id)
 
 		default:
@@ -150,15 +166,20 @@ func createTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, _ := strconv.Atoi(r.Header.Get("X-User-ID"))
+	userID, err := strconv.Atoi(r.Header.Get("X-User-ID"))
+	if err != nil {
+		log.Printf("ERROR: Invalid User ID from token: %v", err)
+		http.Error(w, `{"error":"Unauthorized user ID"}`, http.StatusUnauthorized)
+		return
+	}
 	t.UserID = userID
 
-	err := db.QueryRow(
+	err = db.QueryRow(
 		`INSERT INTO tickets (user_id, title, description)
 		 VALUES ($1, $2, $3)
-		 RETURNING id, status`,
+		 RETURNING id, status, created_at`,
 		t.UserID, t.Title, t.Description,
-	).Scan(&t.ID, &t.Status)
+	).Scan(&t.ID, &t.Status, &t.CreatedAt)
 
 	if err != nil {
 		http.Error(w, `{"error":"Insert failed"}`, http.StatusInternalServerError)
@@ -175,7 +196,7 @@ func createTicket(w http.ResponseWriter, r *http.Request) {
 }
 
 func getAllTickets(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query("SELECT id, user_id, title, description, status FROM tickets ORDER BY id DESC")
+	rows, err := db.Query("SELECT id, user_id, title, description, status, created_at FROM tickets ORDER BY id DESC")
 	if err != nil {
 		http.Error(w, `{"error":"Query failed"}`, http.StatusInternalServerError)
 		return
@@ -185,7 +206,7 @@ func getAllTickets(w http.ResponseWriter, r *http.Request) {
 	var tickets []Ticket
 	for rows.Next() {
 		var t Ticket
-		rows.Scan(&t.ID, &t.UserID, &t.Title, &t.Description, &t.Status)
+		rows.Scan(&t.ID, &t.UserID, &t.Title, &t.Description, &t.Status, &t.CreatedAt)
 		tickets = append(tickets, t)
 	}
 
@@ -193,10 +214,15 @@ func getAllTickets(w http.ResponseWriter, r *http.Request) {
 }
 
 func getUserTickets(w http.ResponseWriter, r *http.Request) {
-	userID, _ := strconv.Atoi(r.Header.Get("X-User-ID"))
+	userID, err := strconv.Atoi(r.Header.Get("X-User-ID"))
+	if err != nil {
+		log.Printf("ERROR: Invalid User ID from token for getUserTickets: %v", err)
+		http.Error(w, `{"error":"Unauthorized user ID"}`, http.StatusUnauthorized)
+		return
+	}
 
 	rows, err := db.Query(
-		"SELECT id, user_id, title, description, status FROM tickets WHERE user_id=$1 ORDER BY id DESC",
+		"SELECT id, user_id, title, description, status, created_at FROM tickets WHERE user_id=$1 ORDER BY id DESC",
 		userID,
 	)
 	if err != nil {
@@ -208,7 +234,7 @@ func getUserTickets(w http.ResponseWriter, r *http.Request) {
 	var tickets []Ticket
 	for rows.Next() {
 		var t Ticket
-		rows.Scan(&t.ID, &t.UserID, &t.Title, &t.Description, &t.Status)
+		rows.Scan(&t.ID, &t.UserID, &t.Title, &t.Description, &t.Status, &t.CreatedAt)
 		tickets = append(tickets, t)
 	}
 
@@ -216,13 +242,16 @@ func getUserTickets(w http.ResponseWriter, r *http.Request) {
 }
 
 func getTicket(w http.ResponseWriter, r *http.Request, id int) {
+	log.Printf("DEBUG: getTicket called for ID: %d", id)
+	log.Printf("DEBUG: Querying DB for ticket with ID: %d", id)
 	var t Ticket
 	err := db.QueryRow(
-		"SELECT id, user_id, title, description, status FROM tickets WHERE id=$1",
+		"SELECT id, user_id, title, description, status, created_at FROM tickets WHERE id=$1", // Corrected SQL
 		id,
-	).Scan(&t.ID, &t.UserID, &t.Title, &t.Description, &t.Status)
+	).Scan(&t.ID, &t.UserID, &t.Title, &t.Description, &t.Status, &t.CreatedAt)
 
 	if err != nil {
+		log.Printf("Error getting ticket with id %d: %v", id, err)
 		http.Error(w, `{"error":"Ticket not found"}`, http.StatusNotFound)
 		return
 	}
@@ -239,7 +268,7 @@ func updateTicketStatus(w http.ResponseWriter, r *http.Request, id int) {
 		return
 	}
 
-	_, err := db.Exec("UPDATE tickets SET status=$1 WHERE id=$2", payload.Status, id)
+	_, err := db.Exec("UPDATE tickets SET status=$1 WHERE id=$2", payload.Status, id) // Corrected SQL
 	if err != nil {
 		http.Error(w, `{"error":"Update failed"}`, http.StatusInternalServerError)
 		return
