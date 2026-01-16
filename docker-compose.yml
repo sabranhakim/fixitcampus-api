@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  #--- User Service (PHP + MySQL) ---#
+  # ================= USER SERVICE =================
   user-service:
     build: ./user-service
     container_name: user-service
@@ -33,7 +33,22 @@ services:
     networks:
       - fixitcampus-net
 
-  #--- Ticket Service (Go + PostgreSQL) ---#
+  # ================= MYSQL UI =================
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: phpmyadmin
+    ports:
+      - "8085:80"
+    environment:
+      PMA_HOST: mysql
+      PMA_USER: user
+      PMA_PASSWORD: password
+    depends_on:
+      - mysql
+    networks:
+      - fixitcampus-net
+
+  # ================= TICKET SERVICE =================
   ticket-service:
     build: ./ticket-service
     container_name: ticket-service
@@ -65,7 +80,21 @@ services:
     networks:
       - fixitcampus-net
 
-  #--- Notification Service (Node.js + MongoDB) ---#
+  # ================= POSTGRES UI =================
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    ports:
+      - "8086:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@fixitcampus.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    depends_on:
+      - postgres
+    networks:
+      - fixitcampus-net
+
+  # ================= NOTIFICATION SERVICE =================
   notification-service:
     build: ./notification-service
     container_name: notification-service
@@ -95,8 +124,25 @@ services:
       - mongo-data:/data/db
     networks:
       - fixitcampus-net
-      
-  #--- Reporting Service (Python + Redis) ---#
+
+  # ================= MONGODB UI =================
+  mongo-express:
+    image: mongo-express
+    container_name: mongo-express
+    ports:
+      - "8087:8081"
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_MONGODB_ADMINUSERNAME: user
+      ME_CONFIG_MONGODB_ADMINPASSWORD: password
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: admin
+    depends_on:
+      - mongodb
+    networks:
+      - fixitcampus-net
+
+  # ================= REPORTING SERVICE =================
   reporting-service:
     build: ./reporting-service
     container_name: reporting-service
@@ -120,12 +166,25 @@ services:
     networks:
       - fixitcampus-net
 
+  # ================= REDIS UI =================
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: redisinsight
+    ports:
+      - "8088:5540"
+    depends_on:
+      - redis
+    networks:
+      - fixitcampus-net
+
+# ================= VOLUMES =================
 volumes:
   mysql-data:
   postgres-data:
   mongo-data:
   redis-data:
 
+# ================= NETWORK =================
 networks:
   fixitcampus-net:
     driver: bridge
