@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	_ "github.com/lib/pq"
@@ -158,6 +159,35 @@ func createTable() {
 		log.Fatalf("Create table error: %v", err)
 	}
 }
+//// ============= Helper ==============
+func postJSON(url string, payload any) {
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("ERROR: Marshal payload failed: %v", err)
+		return
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
+	if err != nil {
+		log.Printf("ERROR: Create request failed: %v", err)
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("ERROR: POST %s failed: %v", url, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	log.Printf("INFO: POST %s -> %s", url, resp.Status)
+}
+
 
 func createTicket(w http.ResponseWriter, r *http.Request) {
 	var t Ticket
@@ -260,19 +290,73 @@ func getTicket(w http.ResponseWriter, r *http.Request, id int) {
 }
 
 func updateTicketStatus(w http.ResponseWriter, r *http.Request, id int) {
+
 	var payload struct {
 		Status string `json:"status"`
 	}
+
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, `{"error":"Invalid body"}`, http.StatusBadRequest)
 		return
 	}
 
-	_, err := db.Exec("UPDATE tickets SET status=$1 WHERE id=$2", payload.Status, id) // Corrected SQL
+	if payload.Status == "" {
+		http.Error(w, `{"error":"Status is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	// === GET OLD STATUS ===
+	var oldStatus string
+	err := db.QueryRow(
+		"SELECT status FROM tickets WHERE id=$1",
+		id,
+	).Scan(&oldStatus)
+
 	if err != nil {
+		log.Printf("ERROR: Ticket %d not found: %v", id, err)
+		http.Error(w, `{"error":"Ticket not found"}`, http.StatusNotFound)
+		return
+	}
+
+	// === UPDATE STATUS ===
+	_, err = db.Exec(
+		"UPDATE tickets SET status=$1 WHERE id=$2",
+		payload.Status,
+		id,
+	)
+
+	if err != nil {
+		log.Printf("ERROR: Update failed for ticket %d: %v", id, err)
 		http.Error(w, `{"error":"Update failed"}`, http.StatusInternalServerError)
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]string{"message": "Status updated"})
+	// === NOTIFY REPORTING SERVICE ===
+	go postJSON(
+		"http://reporting-service:5000/reports/update",
+		map[string]any{
+			"event":      "ticket_updated",
+			"ticket_id":  id,
+			"old_status": oldStatus,
+			"new_status": payload.Status,
+		},
+	)
+
+	// === NOTIFY NOTIFICATION SERVICE ===
+	go postJSON(
+		"http://notification-service:8083/notifications",
+		map[string]string{
+			"event":   "ticket_status_change",
+			"message": fmt.Sprintf(
+				"Status tiket #%d berubah dari %s menjadi %s",
+				id,
+				oldStatus,
+				payload.Status,
+			),
+		},
+	)
+
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "Status updated successfully",
+	})
 }

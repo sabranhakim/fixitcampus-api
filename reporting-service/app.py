@@ -44,16 +44,44 @@ def update_report():
         return jsonify({"error": "Redis service not available"}), 503
 
     data = request.get_json()
-    event_type = data.get('event') # Misal: "ticket_created", "ticket_closed"
+    event_type = data.get('event')
+    ticket_id = data.get('ticket_id') # For logging/debugging
 
     if event_type == 'ticket_created':
         new_total = r.incr('tickets:open')
+        print(f"INFO: Ticket {ticket_id} created. Open tickets: {new_total}")
         return jsonify({"status": "success", "open_tickets": new_total})
-    elif event_type == 'ticket_closed':
-        r.decr('tickets:open')
-        new_total = r.incr('tickets:closed')
-        return jsonify({"status": "success", "closed_tickets": new_total})
+    elif event_type == 'ticket_updated':
+        old_status = data.get('old_status')
+        new_status = data.get('new_status')
+        print(f"INFO: Ticket {ticket_id} updated from {old_status} to {new_status}")
+
+        if old_status == 'open' and new_status == 'closed':
+            r.decr('tickets:open')
+            r.incr('tickets:closed')
+            print(f"INFO: Updated counts: Open={r.get('tickets:open')}, Closed={r.get('tickets:closed')}")
+        elif old_status == 'closed' and new_status == 'open':
+            r.decr('tickets:closed')
+            r.incr('tickets:open')
+            print(f"INFO: Updated counts: Open={r.get('tickets:open')}, Closed={r.get('tickets:closed')}")
+        elif old_status == 'open' and new_status == 'in_progress':
+            # Optionally handle in_progress counts if needed, for now just log
+            print("INFO: Ticket status changed from open to in_progress. No change to open/closed counts in summary.")
+        elif old_status == 'in_progress' and new_status == 'closed':
+            # If in_progress tickets are considered "open" for summary purposes
+            r.decr('tickets:open')
+            r.incr('tickets:closed')
+            print(f"INFO: Updated counts: Open={r.get('tickets:open')}, Closed={r.get('tickets:closed')}")
+        elif old_status == 'in_progress' and new_status == 'open':
+            # If in_progress was treated as open, and it goes back to open, no change
+            print("INFO: Ticket status changed from in_progress to open. No change to open/closed counts in summary.")
+        # Add more complex transitions if your status workflow requires it
+        else:
+            print(f"WARNING: Unhandled status transition for ticket {ticket_id}: {old_status} -> {new_status}")
+
+        return jsonify({"status": "success", "message": "Report updated based on ticket status change"})
     else:
+        print(f"ERROR: Invalid or unhandled event type received: {event_type} for ticket {ticket_id}")
         return jsonify({"error": "Invalid event type"}), 400
 
 if __name__ == '__main__':
